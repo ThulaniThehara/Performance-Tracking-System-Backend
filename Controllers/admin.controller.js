@@ -1,5 +1,44 @@
 const User = require('../Models/baseUser.model');
+const Project = require('../Models/project.model');
 const { issueSetPasswordToken } = require('./auth.controller');
+
+// Project.status is a free-text string, so the same idea arrives spelled several
+// ways depending on who typed it. Match on a normalised form instead of one literal.
+const ONGOING_STATUSES = ['ongoing', 'active', 'inprogress', 'progress', 'started'];
+const normalise = (s) => String(s || '').toLowerCase().replace(/[\s_-]/g, '');
+
+/**
+ * GET /api/admin/stats   (ADMIN only)
+ * Headline counters for the admin home page.
+ */
+exports.getStats = async (req, res) => {
+    try {
+        const [totalProjects, totalMembers, activeMembers, statuses] = await Promise.all([
+            Project.countDocuments(),
+            User.countDocuments(),
+            User.countDocuments({ status: 'ACTIVE' }),
+            Project.distinct('status'),
+        ]);
+
+        const ongoingValues = statuses.filter(s => ONGOING_STATUSES.includes(normalise(s)));
+        const ongoingProjects = ongoingValues.length
+            ? await Project.countDocuments({ status: { $in: ongoingValues } })
+            : 0;
+
+        res.status(200).send({
+            message: 'Stats fetched',
+            data: {
+                totalProjects,
+                ongoingProjects,
+                completedProjects: totalProjects - ongoingProjects,
+                totalMembers,
+                activeMembers,
+            }
+        });
+    } catch (e) {
+        res.status(500).send({ message: 'Error fetching stats', error: e.message });
+    }
+};
 
 /**
  * POST /api/admin/users/create   (ADMIN only)

@@ -1,5 +1,4 @@
 const projectCollection = require('../Models/project.model');
-const { param } = require('../Routes/project.route');
 
 exports.addProject = async (req, res) => {
     const data = req.body;

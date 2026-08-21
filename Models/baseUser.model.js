@@ -1,6 +1,9 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const db = mongoose.connection.useDb("MPTS");
+// useCache keeps every model on ONE connection handle. Without it each call
+// returns a fresh handle, models land on different handles, and populate()
+// fails with "Schema hasn't been registered for model ...".
+const db = mongoose.connection.useDb("MPTS", { useCache: true });
 
 const USER_ROLES = ['ADMIN', 'CHAIRPERSON', 'COMMITTEEHEAD', 'MEMBER'];
 const USER_STATUS = ['ACTIVE', 'INACTIVE'];

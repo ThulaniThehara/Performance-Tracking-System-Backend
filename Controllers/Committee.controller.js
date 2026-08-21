@@ -1,5 +1,9 @@
 const CommitteeCollection = require('../Models/Committee.model');
-const ProjectCollection = require('../Models/Project.model'); // Assuming you have this
+// Path casing must match the file exactly. On Windows './Project.model' and
+// './project.model' both resolve, but Node caches them as two separate
+// modules, so the model gets registered twice and Mongoose throws
+// OverwriteModelError.
+const ProjectCollection = require('../Models/project.model');
 
 // Add Committee to a Project (Only by Chairperson)
 exports.addCommittee = async (req, res) => {

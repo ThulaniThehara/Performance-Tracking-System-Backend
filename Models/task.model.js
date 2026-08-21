@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const db = mongoose.connection.useDb("MPTS");
+const db = mongoose.connection.useDb("MPTS", { useCache: true });
 
 const taskSchema = new mongoose.Schema({
     TName:{type:String, required:true},
