@@ -60,20 +60,27 @@ async function summarise(projectIds) {
 exports.getMyProjects = async (req, res) => {
     try {
         const memberships = await ProjectMember.find({ userId: req.auth.id });
-        const projectIds = memberships.map(m => m.projectId);
+        const memberProjectIds = memberships.map(m => m.projectId);
 
-        const projects = await Project.find({ _id: { $in: projectIds } })
+        const projects = await Project.find({
+            $or: [
+                { _id: { $in: memberProjectIds } },
+                { chairpersonId: req.auth.id }
+            ]
+        })
             .populate('chairpersonId', USER_FIELDS)
             .sort({ StartDate: -1, createdAt: -1 });
 
-        const stats = await summarise(projectIds);
+        const allProjectIds = projects.map(p => p._id);
+        const stats = await summarise(allProjectIds);
         const roleByProject = new Map(memberships.map(m => [String(m.projectId), m.role]));
 
         const led = [];
         const contributing = [];
 
         for (const p of projects) {
-            const myRole = roleByProject.get(String(p._id)) || 'MEMBER';
+            const isChairUser = p.chairpersonId && String(p.chairpersonId._id || p.chairpersonId) === String(req.auth.id);
+            const myRole = isChairUser ? 'CHAIRPERSON' : (roleByProject.get(String(p._id)) || 'MEMBER');
             const card = {
                 ...p.toObject(),
                 myRole,

@@ -52,13 +52,18 @@ exports.loadProjectAccess = async (req, res, next) => {
             userId: req.auth.id,
         });
 
-        if (!membership && req.auth.role !== 'ADMIN') {
+        // Determine if the caller is the assigned chairperson of this project
+        const isChairpersonUser = project.chairpersonId && String(project.chairpersonId._id || project.chairpersonId) === String(req.auth.id);
+
+        if (!membership && !isChairpersonUser && req.auth.role !== 'ADMIN') {
             return res.status(404).send({ message: 'Project not found' });
         }
 
+        const effectiveRole = isChairpersonUser ? 'CHAIRPERSON' : (membership?.role || 'MEMBER');
+
         req.project = project;
         req.membership = membership;
-        req.perms = permissionsFor(membership?.role, req.auth.role);
+        req.perms = permissionsFor(effectiveRole, req.auth.role);
         next();
     } catch (e) {
         if (e.name === 'CastError') {
