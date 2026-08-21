@@ -59,6 +59,12 @@ exports.createUser = async (req, res) => {
             userRole: String(b.userRole || 'MEMBER').trim().toUpperCase(),
         };
 
+        const tempPass = String(b.temporaryPassword || b.password || '').trim();
+        if (tempPass) {
+            payload.password = tempPass;
+            payload.mustSetPassword = true;
+        }
+
         for (const field of ['indexNo', 'email', 'name', 'faculty', 'batch', 'contactNO']) {
             if (!payload[field]) {
                 return res.status(400).send({ message: `${field} is required` });
@@ -83,9 +89,10 @@ exports.createUser = async (req, res) => {
         const { link } = await issueSetPasswordToken(user); // saves the document
 
         res.status(201).send({
-            message: 'Account created. Send the set-password link to the user.',
+            message: 'Account created successfully with temporary password.',
             data: user.toPublicJSON(),
-            setPasswordLink: link
+            setPasswordLink: link,
+            temporaryPassword: tempPass || undefined
         });
     } catch (e) {
         if (e.name === 'ValidationError') {
