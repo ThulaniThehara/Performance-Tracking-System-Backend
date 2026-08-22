@@ -3,6 +3,8 @@ const Committee = require('../Models/Committee.model');
 const ProjectMember = require('../Models/projectMember.model');
 const ProjectTask = require('../Models/projectTask.model');
 const User = require('../Models/baseUser.model');
+const Feedback = require('../Models/feedback.model');
+const Complaint = require('../Models/complaint.model');
 
 const USER_FIELDS = 'name email indexNo userRole faculty batch contactNO';
 
@@ -649,3 +651,308 @@ exports.getAssignableUsers = async (req, res) => {
         res.status(500).send({ message: 'Could not load users', error: e.message });
     }
 };
+
+/**
+ * Helper to compute date bounds for period filtering
+ */
+function getPeriodBounds(period) {
+    const now = new Date();
+    let startDate = null;
+    let endDate = null;
+
+    if (period === 'month') {
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    } else if (period === 'quarter') {
+        const qMonth = Math.floor(now.getMonth() / 3) * 3;
+        startDate = new Date(now.getFullYear(), qMonth, 1, 0, 0, 0, 0);
+        endDate = new Date(now.getFullYear(), qMonth + 3, 0, 23, 59, 59, 999);
+    } else if (period === 'year') {
+        startDate = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+        endDate = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+    }
+
+    return { startDate, endDate };
+}
+
+/**
+ * GET /api/pm/reports?period=all|month|quarter|year
+ * Aggregates all members, chairpersons, assigned projects, tasks completed vs before deadline,
+ * on-time performance scores, project summaries, and executive KPI analytics.
+ */
+exports.getReportsAnalytics = async (req, res) => {
+    try {
+        const period = String(req.query.period || 'all').toLowerCase();
+        const { startDate, endDate } = getPeriodBounds(period);
+
+        // 1. Fetch relevant projects
+        const projectQuery = {};
+        if (startDate && endDate) {
+            projectQuery.$or = [
+                { StartDate: { $lte: endDate }, EndDate: { $gte: startDate } },
+                { StartDate: { $gte: startDate, $lte: endDate } },
+                { createdAt: { $gte: startDate, $lte: endDate } },
+                { EndDate: null, StartDate: { $lte: endDate } }
+            ];
+        }
+
+        const allProjects = await Project.find(projectQuery)
+            .populate('chairpersonId', USER_FIELDS)
+            .sort({ StartDate: -1, createdAt: -1 });
+
+        const projectIds = allProjects.map(p => p._id);
+        const statsByProject = await summarise(projectIds);
+
+        // 2. Fetch all active users
+        const users = await User.find({ status: 'ACTIVE' })
+            .select(USER_FIELDS)
+            .sort({ name: 1 });
+
+        // 3. Fetch memberships
+        const memberships = await ProjectMember.find({ projectId: { $in: projectIds } });
+        const membershipsByUser = new Map();
+        for (const m of memberships) {
+            const uid = String(m.userId);
+            if (!membershipsByUser.has(uid)) membershipsByUser.set(uid, []);
+            membershipsByUser.get(uid).push(m);
+        }
+
+        // 4. Fetch tasks matching period & projects
+        const taskQuery = { projectId: { $in: projectIds } };
+        if (startDate && endDate) {
+            taskQuery.$or = [
+                { dueDate: { $gte: startDate, $lte: endDate } },
+                { completedAt: { $gte: startDate, $lte: endDate } },
+                { createdAt: { $gte: startDate, $lte: endDate } }
+            ];
+        }
+        const tasks = await ProjectTask.find(taskQuery);
+
+        const tasksByUser = new Map();
+        for (const t of tasks) {
+            const uid = String(t.assignedTo);
+            if (!tasksByUser.has(uid)) tasksByUser.set(uid, []);
+            tasksByUser.get(uid).push(t);
+        }
+
+        // 5. Build Member Performance Scorecard
+        const performanceScorecard = [];
+        let totalScoreSum = 0;
+        let evaluatedCount = 0;
+
+        for (const u of users) {
+            const uid = String(u._id);
+            const userMemberships = membershipsByUser.get(uid) || [];
+            const userTasks = tasksByUser.get(uid) || [];
+
+            // Find projects this user leads as chairperson
+            const ledProjects = allProjects.filter(p => p.chairpersonId && String(p.chairpersonId._id) === uid);
+            const userProjectIds = new Set([
+                ...userMemberships.map(m => String(m.projectId)),
+                ...ledProjects.map(p => String(p._id))
+            ]);
+
+            const userProjects = allProjects.filter(p => userProjectIds.has(String(p._id)));
+            const projectNames = userProjects.map(p => p.PName);
+
+            const totalTasks = userTasks.length;
+            const tasksDone = userTasks.filter(t => t.status === 'COMPLETED').length;
+
+            // Tasks completed before or on deadline
+            const completedOnTime = userTasks.filter(t => {
+                if (t.status !== 'COMPLETED') return false;
+                if (!t.completedAt || !t.dueDate) return true;
+                return new Date(t.completedAt).getTime() <= new Date(t.dueDate).getTime();
+            }).length;
+
+            const completedLate = Math.max(0, tasksDone - completedOnTime);
+            const overdueTasks = userTasks.filter(t => {
+                if (t.status === 'COMPLETED' || !t.dueDate) return false;
+                return new Date(t.dueDate).getTime() < Date.now();
+            }).length;
+
+            // Performance Score calculation logic
+            let score = 100;
+            if (totalTasks > 0) {
+                // On-time tasks get 100% weight, late tasks get 60% weight
+                score = Math.round(((completedOnTime * 1.0 + completedLate * 0.6) / totalTasks) * 100);
+            } else if (ledProjects.length > 0) {
+                // For chairpersons without direct task assignments, score reflects led projects' average progress
+                const avgProg = ledProjects.reduce((acc, p) => acc + (statsByProject[p._id]?.progress || 0), 0) / ledProjects.length;
+                score = Math.max(70, Math.round(avgProg));
+            }
+
+            score = Math.min(100, Math.max(0, score));
+            totalScoreSum += score;
+            evaluatedCount++;
+
+            let status = 'Good';
+            if (score >= 90) status = 'Excellent';
+            else if (score < 75) status = 'Needs Attention';
+
+            let roleDisplay = 'Member';
+            if (u.userRole === 'ADMIN') roleDisplay = 'Administrator';
+            else if (ledProjects.length > 0 || u.userRole === 'CHAIRPERSON') roleDisplay = 'Chairperson';
+            else if (userMemberships.some(m => m.role === 'COMMITTEE_LEAD')) roleDisplay = 'Committee Lead';
+
+            performanceScorecard.push({
+                id: u._id,
+                member: u.name,
+                role: roleDisplay,
+                faculty: u.faculty || '',
+                batch: u.batch || '',
+                project: projectNames.length > 0 ? projectNames.join(', ') : 'Unassigned',
+                projectCount: projectNames.length,
+                score,
+                status,
+                tasksDone,
+                totalTasks,
+                completedOnTime,
+                completedLate,
+                overdueTasks,
+                date: new Date().toISOString().split('T')[0]
+            });
+        }
+
+        // 6. Project Summaries
+        const projectSummaries = allProjects.map(p => {
+            const s = statsByProject[p._id] || {
+                memberCount: 0, committeeCount: 0, totalTasks: 0,
+                completedTasks: 0, pendingTasks: 0, progress: 0
+            };
+
+            let budgetHealth = 'On Track';
+            if (p.status === 'COMPLETED' || s.progress === 100) budgetHealth = 'Completed';
+            else if (s.progress >= 75) budgetHealth = 'Optimal';
+            else if (s.pendingTasks > 10 && s.progress < 40) budgetHealth = 'Needs Attention';
+
+            return {
+                id: p._id,
+                name: p.PName,
+                lead: p.chairpersonId?.name || p.chairPerson || 'Unassigned',
+                progress: s.progress,
+                members: s.memberCount,
+                committees: s.committeeCount,
+                tasksDone: s.completedTasks,
+                totalTasks: s.totalTasks,
+                status: p.status === 'UPCOMING' ? 'Upcoming' : p.status === 'COMPLETED' ? 'Completed' : 'Active',
+                budgetHealth,
+                startDate: p.StartDate,
+                endDate: p.EndDate
+            };
+        });
+
+        // 7. KPI Metrics calculation
+        const avgPerformance = evaluatedCount > 0 ? (totalScoreSum / evaluatedCount).toFixed(1) : '100.0';
+        const activeMembersCount = users.length;
+        const healthyProjectsCount = projectSummaries.filter(p => p.status === 'Completed' || p.budgetHealth === 'Optimal' || p.budgetHealth === 'On Track').length;
+        const projectHealthRate = projectSummaries.length > 0 ? Math.round((healthyProjectsCount / projectSummaries.length) * 100) : 100;
+
+        const totalTasksInScope = tasks.length;
+        const totalDoneTasksInScope = tasks.filter(t => t.status === 'COMPLETED').length;
+        const taskVelocity = totalTasksInScope > 0 ? Math.round((totalDoneTasksInScope / totalTasksInScope) * 100) : 100;
+
+        // 8. Feedback and Complaints lists
+        const [feedbackList, complaintList] = await Promise.all([
+            Feedback.find().sort({ createdAt: -1 }).limit(30),
+            Complaint.find().sort({ createdAt: -1 }).limit(30)
+        ]);
+
+        const formattedFeedback = feedbackList.map(f => ({
+            id: f._id,
+            author: f.author,
+            role: f.role,
+            type: f.type,
+            message: f.message,
+            rating: f.rating,
+            date: f.createdAt ? f.createdAt.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+        }));
+
+        const formattedComplaints = complaintList.map(c => ({
+            id: c._id,
+            from: c.from,
+            category: c.category,
+            title: c.title,
+            description: c.description,
+            priority: c.priority,
+            status: c.status,
+            date: c.createdAt ? c.createdAt.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+        }));
+
+        res.status(200).send({
+            message: 'Reports analytics fetched',
+            data: {
+                period,
+                kpi: {
+                    avgPerformance,
+                    activeMembers: activeMembersCount,
+                    projectHealth: projectHealthRate,
+                    taskVelocity,
+                    totalTasks: totalTasksInScope,
+                    completedTasks: totalDoneTasksInScope,
+                    totalProjects: projectSummaries.length
+                },
+                performance: performanceScorecard,
+                projects: projectSummaries,
+                feedback: formattedFeedback,
+                complaints: formattedComplaints
+            }
+        });
+    } catch (e) {
+        res.status(500).send({ message: 'Could not generate reports', error: e.message });
+    }
+};
+
+/**
+ * POST /api/pm/reports/feedback
+ * Submit user feedback
+ */
+exports.submitFeedback = async (req, res) => {
+    try {
+        const { author, type, message, rating } = req.body;
+        if (!message || !String(message).trim()) {
+            return res.status(400).send({ message: 'Feedback message is required' });
+        }
+
+        const fb = await Feedback.create({
+            userId: req.auth.id,
+            author: author && String(author).trim() ? String(author).trim() : 'Anonymous Member',
+            role: req.auth.role || 'Member',
+            type: type || 'Suggestion',
+            message: String(message).trim(),
+            rating: Math.min(5, Math.max(1, Number(rating) || 5))
+        });
+
+        res.status(201).send({ message: 'Feedback submitted successfully', data: fb });
+    } catch (e) {
+        res.status(500).send({ message: 'Could not submit feedback', error: e.message });
+    }
+};
+
+/**
+ * POST /api/pm/reports/complaint
+ * Submit an issue/ticket
+ */
+exports.submitComplaint = async (req, res) => {
+    try {
+        const { from, category, title, description, priority } = req.body;
+        if (!title || !description) {
+            return res.status(400).send({ message: 'Title and description are required' });
+        }
+
+        const cp = await Complaint.create({
+            userId: req.auth.id,
+            from: from && String(from).trim() ? String(from).trim() : 'Anonymous Member',
+            category: category || 'Technical Issue',
+            title: String(title).trim(),
+            description: String(description).trim(),
+            priority: priority || 'Medium',
+            status: 'Open'
+        });
+
+        res.status(201).send({ message: 'Issue ticket submitted successfully', data: cp });
+    } catch (e) {
+        res.status(500).send({ message: 'Could not submit complaint', error: e.message });
+    }
+};
+

@@ -15,6 +15,11 @@ router.get('/my-dashboard', hub.getMyDashboard);
 router.get('/my-tasks', tasks.getMyTasks);
 router.patch('/my-tasks/:taskId/status', tasks.updateMyTaskStatus);
 
+/* ---- reports and feedback --------------------------------------------- */
+router.get('/reports', hub.getReportsAnalytics);
+router.post('/reports/feedback', hub.submitFeedback);
+router.post('/reports/complaint', hub.submitComplaint);
+
 /* ---- admin-only project management ------------------------------------ *
  * A project is always created by an admin, who assigns its chairperson in
  * the same step. There is no self-service creation: this keeps every
