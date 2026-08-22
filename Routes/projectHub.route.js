@@ -11,6 +11,7 @@ router.use(verifyToken);
 
 /* ---- the caller's own view ------------------------------------------- */
 router.get('/my-projects', hub.getMyProjects);
+router.get('/my-dashboard', hub.getMyDashboard);
 router.get('/my-tasks', tasks.getMyTasks);
 router.patch('/my-tasks/:taskId/status', tasks.updateMyTaskStatus);
 
