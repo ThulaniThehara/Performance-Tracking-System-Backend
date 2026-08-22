@@ -99,6 +99,155 @@ exports.getMyProjects = async (req, res) => {
 };
 
 /**
+ * GET /api/pm/my-dashboard
+ * Aggregated data for the caller's own profile page: every project they're
+ * involved in (with a personal contribution % derived from their own task
+ * completion on that project), every committee they lead or belong to, a
+ * recent-activity feed synthesized from timestamped records (there is no
+ * dedicated activity log), and summary stats for the overview cards.
+ */
+exports.getMyDashboard = async (req, res) => {
+    try {
+        const userId = req.auth.id;
+
+        const memberships = await ProjectMember.find({ userId });
+        const projectIds = memberships.map(m => m.projectId);
+        const membershipByProject = new Map(memberships.map(m => [String(m.projectId), m]));
+
+        const [projects, myTasks] = await Promise.all([
+            Project.find({ _id: { $in: projectIds } }).sort({ StartDate: -1, createdAt: -1 }),
+            ProjectTask.find({ projectId: { $in: projectIds }, assignedTo: userId }),
+        ]);
+
+        const tasksByProject = myTasks.reduce((acc, t) => {
+            const k = String(t.projectId);
+            (acc[k] ||= []).push(t);
+            return acc;
+        }, {});
+
+        const projectCards = projects.map(p => {
+            const membership = membershipByProject.get(String(p._id));
+            const myTasksHere = tasksByProject[String(p._id)] || [];
+            const completedHere = myTasksHere.filter(t => t.status === 'COMPLETED').length;
+            const contribution = myTasksHere.length
+                ? Math.round((completedHere / myTasksHere.length) * 100)
+                : null;
+
+            return {
+                id: p._id,
+                name: p.PName,
+                societyName: p.societyName || '',
+                role: membership?.role || 'MEMBER',
+                position: membership?.position || '',
+                year: p.StartDate ? new Date(p.StartDate).getFullYear() : new Date(p.createdAt).getFullYear(),
+                status: p.status,
+                contribution,
+            };
+        });
+
+        const committeeIds = memberships.filter(m => m.committeeId).map(m => m.committeeId);
+        const committees = committeeIds.length
+            ? await Committee.find({ _id: { $in: committeeIds } }).populate('ProjectId', 'PName status StartDate EndDate')
+            : [];
+
+        const memberCounts = committeeIds.length
+            ? await ProjectMember.aggregate([
+                { $match: { committeeId: { $in: committeeIds } } },
+                { $group: { _id: '$committeeId', n: { $sum: 1 } } },
+            ])
+            : [];
+        const memberCountMap = new Map(memberCounts.map(c => [String(c._id), c.n]));
+
+        const committeeCards = committees.map(c => {
+            const membership = memberships.find(m => String(m.committeeId) === String(c._id));
+            const proj = c.ProjectId;
+            const startYear = proj?.StartDate ? new Date(proj.StartDate).getFullYear() : null;
+            const endYear = proj?.EndDate ? new Date(proj.EndDate).getFullYear() : null;
+            const year = startYear && endYear && startYear !== endYear
+                ? `${startYear}/${endYear}`
+                : String(startYear || endYear || '');
+
+            return {
+                id: c._id,
+                name: c.CName,
+                projectName: proj?.PName || '',
+                role: membership?.role || 'MEMBER',
+                position: membership?.position || '',
+                membersCount: memberCountMap.get(String(c._id)) ?? c.MemberCount ?? 0,
+                status: proj?.status || 'ACTIVE',
+                year,
+            };
+        });
+
+        // No activity log exists, so the feed is synthesized from timestamps
+        // already on hand: task completions, and when the caller took on a
+        // chairperson/committee-lead role.
+        const activity = [];
+
+        myTasks.filter(t => t.completedAt).forEach(t => {
+            const proj = projects.find(p => String(p._id) === String(t.projectId));
+            activity.push({
+                type: 'task',
+                title: `Completed "${t.title}"`,
+                detail: proj ? proj.PName : '',
+                date: t.completedAt,
+            });
+        });
+
+        memberships.forEach(m => {
+            const proj = projects.find(p => String(p._id) === String(m.projectId));
+            if (!proj) return;
+            if (m.role === 'CHAIRPERSON') {
+                activity.push({
+                    type: 'project',
+                    title: `Chairing "${proj.PName}"`,
+                    detail: 'Assigned as project chairperson',
+                    date: m.createdAt,
+                });
+            } else if (m.role === 'COMMITTEE_LEAD') {
+                const c = committees.find(c => String(c._id) === String(m.committeeId));
+                activity.push({
+                    type: 'committee',
+                    title: `Leading "${c?.CName || 'a committee'}"`,
+                    detail: proj.PName,
+                    date: m.createdAt,
+                });
+            }
+        });
+
+        activity.sort((a, b) => new Date(b.date) - new Date(a.date));
+        const recentActivity = activity.slice(0, 8);
+
+        const totalProjects = projectCards.length;
+        const completedProjects = projectCards.filter(p => p.status === 'COMPLETED').length;
+        const totalCommittees = committeeCards.length;
+        const committeesLed = committeeCards.filter(c => c.role === 'COMMITTEE_LEAD').length;
+        const totalTasksAssigned = myTasks.length;
+        const tasksCompleted = myTasks.filter(t => t.status === 'COMPLETED').length;
+        const contributionScore = totalTasksAssigned
+            ? Math.round((tasksCompleted / totalTasksAssigned) * 100)
+            : 0;
+
+        res.status(200).send({
+            message: 'Dashboard fetched',
+            data: {
+                projects: projectCards,
+                committees: committeeCards,
+                recentActivity,
+                stats: {
+                    totalProjects, completedProjects,
+                    totalCommittees, committeesLed,
+                    totalTasksAssigned, tasksCompleted,
+                    contributionScore,
+                },
+            },
+        });
+    } catch (e) {
+        res.status(500).send({ message: 'Could not load your dashboard', error: e.message });
+    }
+};
+
+/**
  * GET /api/pm/projects/:projectId
  * Everything the details page renders, plus the caller's permission set so the
  * UI knows which controls to draw.
