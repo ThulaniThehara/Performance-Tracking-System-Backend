@@ -5,6 +5,7 @@ const ProjectTask = require('../Models/projectTask.model');
 const User = require('../Models/baseUser.model');
 const Feedback = require('../Models/feedback.model');
 const Complaint = require('../Models/complaint.model');
+const { notify } = require('../Services/notification.service');
 
 const USER_FIELDS = 'name email indexNo userRole faculty batch contactNO';
 
@@ -593,6 +594,18 @@ exports.addMember = async (req, res) => {
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         ).populate('userId', USER_FIELDS);
+
+        await notify({
+            recipient: user._id,
+            actor: req.auth.id,
+            type: b.committeeId ? 'COMMITTEE_MEMBER_ADDED' : 'PROJECT_MEMBER_ADDED',
+            message: b.committeeId
+                ? `${req.user.name} added you to a committee in "${req.project.PName}"`
+                : `${req.user.name} added you to project "${req.project.PName}"`,
+            projectId: req.project._id,
+            committeeId: b.committeeId || null,
+            link: `/projects/${req.project._id}`,
+        });
 
         res.status(201).send({ message: `${user.name} added to the project`, data: membership });
     } catch (e) {

@@ -1,4 +1,26 @@
 const TaskCollection = require('../Models/task.model');
+const BaseUser = require('../Models/baseUser.model');
+const { notify } = require('../Services/notification.service');
+
+/**
+ * This legacy Task model stores AssignedTo as display-name strings rather
+ * than user ids (see task.model.js), so notifying an assignee means looking
+ * their name back up. Names are matched exactly (post-trim) against
+ * BaseUser.name, which is how they got into AssignedTo in the first place
+ * (AddTask.jsx / ViewTask.jsx populate the picker from committee members'
+ * real names).
+ */
+async function notifyAssignedByName(names, task) {
+    const cleanNames = (names || []).map(n => String(n || '').trim()).filter(Boolean);
+    if (!cleanNames.length) return;
+
+    const users = await BaseUser.find({ name: { $in: cleanNames } });
+    await Promise.all(users.map(u => notify({
+        recipient: u._id,
+        type: 'TASK_ASSIGNED',
+        message: `You were assigned a task: "${task.TName}"`,
+    })));
+}
 
 exports.createTask = async (req, res) => {
     try {
@@ -6,13 +28,16 @@ exports.createTask = async (req, res) => {
        console.log("Incoming task data:", req.body);
         const task = new TaskCollection(taskData);
         await task.save();
-        res.status(200).send({ 
-            message: 'Task created successfully', 
+
+        await notifyAssignedByName(task.AssignedTo, task);
+
+        res.status(200).send({
+            message: 'Task created successfully',
             data: task });
     } catch (error) {
          console.error("Error creating task:", error);
-        res.status(500).send({ 
-            message: 'Error creating task', 
+        res.status(500).send({
+            message: 'Error creating task',
             error: error.message });
     }
 };
@@ -164,11 +189,20 @@ exports.updateAssignedMembers = async (req, res) => {
     const { id } = req.params;
     const { AssignedTo } = req.body; // Expecting an array of member names
     try {
+        const before = await TaskCollection.findById(id);
+        if (!before) return res.status(404).send({ message: 'Task not found' });
+
+        const previousNames = new Set((before.AssignedTo || []).map(n => String(n || '').trim()));
+        const newlyAdded = (AssignedTo || []).filter(n => !previousNames.has(String(n || '').trim()));
+
         const task = await TaskCollection.findByIdAndUpdate(
             id,
             { AssignedTo },
             { new: true }
         );
+
+        await notifyAssignedByName(newlyAdded, task);
+
         res.status(200).send({
             message: "Assigned members updated successfully",
             data: task
