@@ -633,11 +633,15 @@ exports.removeMember = async (req, res) => {
         });
         if (!membership) return res.status(404).send({ message: 'That person is not on this project' });
 
-        // Free any committee they led, and unassign their tasks rather than
-        // deleting work that still needs doing.
+        // Free any committee they led, and remove them from any committee roster
         await Committee.updateMany(
             { ProjectId: req.project._id, leadId: userId },
             { $set: { leadId: null } }
+        );
+
+        await Committee.updateMany(
+            { ProjectId: req.project._id },
+            { $pull: { Members: { UserId: userId } } }
         );
 
         const orphaned = await ProjectTask.countDocuments({

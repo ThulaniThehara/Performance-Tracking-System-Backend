@@ -33,7 +33,6 @@ app.use(cors({
     credentials: true
 }));
 
-const router = require('./Routes/sample.route');
 const routers =require('./Routes/Committee.route');
 const baseUserRoute = require('./Routes/baseUser.route');
 const taskRoute = require('./Routes/task.route');
@@ -51,7 +50,6 @@ app.use('/api/event', eventRoute);
 app.use('/api/pm', projectHubRoute);
 app.use('/api/notifications', notificationRoute);
 app.use('/api/task',taskRoute);
-app.use('/sample',router);
 app.use('/api/user', baseUserRoute);
 app.use('/api/committee',routers);
 app.use('/api/project', projectRoute);

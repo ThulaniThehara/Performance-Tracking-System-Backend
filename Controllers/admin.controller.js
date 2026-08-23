@@ -1,5 +1,6 @@
 const User = require('../Models/baseUser.model');
 const Project = require('../Models/project.model');
+const ProjectTask = require('../Models/projectTask.model');
 const { issueSetPasswordToken } = require('./auth.controller');
 
 // Project.status is a free-text string, so the same idea arrives spelled several
@@ -13,26 +14,51 @@ const normalise = (s) => String(s || '').toLowerCase().replace(/[\s_-]/g, '');
  */
 exports.getStats = async (req, res) => {
     try {
-        const [totalProjects, totalMembers, activeMembers, statuses] = await Promise.all([
+        const [totalProjects, totalMembers, activeMembers, statuses, taskAgg, allProjects] = await Promise.all([
             Project.countDocuments(),
             User.countDocuments(),
             User.countDocuments({ status: 'ACTIVE' }),
             Project.distinct('status'),
+            ProjectTask.aggregate([
+                {
+                    $group: {
+                        _id: null,
+                        totalTasks: { $sum: 1 },
+                        completedTasks: { $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] } }
+                    }
+                }
+            ]),
+            Project.find({}, 'status')
         ]);
 
         const ongoingValues = statuses.filter(s => ONGOING_STATUSES.includes(normalise(s)));
         const ongoingProjects = ongoingValues.length
             ? await Project.countDocuments({ status: { $in: ongoingValues } })
             : 0;
+        const completedProjects = totalProjects - ongoingProjects;
+
+        const totalTasks = taskAgg[0]?.totalTasks || 0;
+        const completedTasks = taskAgg[0]?.completedTasks || 0;
+
+        let overallProgress = 0;
+        if (totalTasks > 0) {
+            overallProgress = Math.round((completedTasks / totalTasks) * 100);
+        } else if (totalProjects > 0) {
+            const finishedCount = allProjects.filter(p => !ONGOING_STATUSES.includes(normalise(p.status)) && normalise(p.status) === 'completed').length;
+            overallProgress = Math.round((finishedCount / totalProjects) * 100);
+        }
 
         res.status(200).send({
             message: 'Stats fetched',
             data: {
                 totalProjects,
                 ongoingProjects,
-                completedProjects: totalProjects - ongoingProjects,
+                completedProjects,
                 totalMembers,
                 activeMembers,
+                totalTasks,
+                completedTasks,
+                overallProgress,
             }
         });
     } catch (e) {
