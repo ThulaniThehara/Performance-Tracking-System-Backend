@@ -43,12 +43,14 @@ const adminRoute = require('./Routes/admin.route');
 const eventRoute = require('./Routes/event.route');
 const projectHubRoute = require('./Routes/projectHub.route');
 const notificationRoute = require('./Routes/notification.route');
+const feedbackRoute = require('./Routes/feedback.route');
 
 app.use('/api/auth', authRoute);
 app.use('/api/admin', adminRoute);
 app.use('/api/event', eventRoute);
 app.use('/api/pm', projectHubRoute);
 app.use('/api/notifications', notificationRoute);
+app.use('/api/feedback', feedbackRoute);
 app.use('/api/task',taskRoute);
 app.use('/api/user', baseUserRoute);
 app.use('/api/committee',routers);
