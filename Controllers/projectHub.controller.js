@@ -796,23 +796,34 @@ exports.getReportsAnalytics = async (req, res) => {
             }).length;
 
             // Performance Score calculation logic
-            let score = 100;
+            let score = null;
+            let status = 'Unassigned';
+
             if (totalTasks > 0) {
                 // On-time tasks get 100% weight, late tasks get 60% weight
                 score = Math.round(((completedOnTime * 1.0 + completedLate * 0.6) / totalTasks) * 100);
+                score = Math.min(100, Math.max(0, score));
+                totalScoreSum += score;
+                evaluatedCount++;
+
+                if (score >= 90) status = 'Excellent';
+                else if (score >= 75) status = 'Good';
+                else status = 'Needs Attention';
             } else if (ledProjects.length > 0) {
                 // For chairpersons without direct task assignments, score reflects led projects' average progress
                 const avgProg = ledProjects.reduce((acc, p) => acc + (statsByProject[p._id]?.progress || 0), 0) / ledProjects.length;
                 score = Math.max(70, Math.round(avgProg));
+                score = Math.min(100, Math.max(0, score));
+                totalScoreSum += score;
+                evaluatedCount++;
+
+                if (score >= 90) status = 'Excellent';
+                else if (score >= 75) status = 'Good';
+                else status = 'Needs Attention';
+            } else {
+                score = null;
+                status = 'Unassigned';
             }
-
-            score = Math.min(100, Math.max(0, score));
-            totalScoreSum += score;
-            evaluatedCount++;
-
-            let status = 'Good';
-            if (score >= 90) status = 'Excellent';
-            else if (score < 75) status = 'Needs Attention';
 
             let roleDisplay = 'Member';
             if (u.userRole === 'ADMIN') roleDisplay = 'Administrator';
