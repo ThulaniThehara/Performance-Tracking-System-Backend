@@ -32,10 +32,15 @@ exports.getStats = async (req, res) => {
         ]);
 
         const ongoingValues = statuses.filter(s => ONGOING_STATUSES.includes(normalise(s)));
+        const completedValues = statuses.filter(s => ['completed', 'finished', 'done', 'ended'].includes(normalise(s)));
+
         const ongoingProjects = ongoingValues.length
             ? await Project.countDocuments({ status: { $in: ongoingValues } })
             : 0;
-        const completedProjects = totalProjects - ongoingProjects;
+        const completedProjects = completedValues.length
+            ? await Project.countDocuments({ status: { $in: completedValues } })
+            : 0;
+        const upcomingProjects = Math.max(0, totalProjects - ongoingProjects - completedProjects);
 
         const totalTasks = taskAgg[0]?.totalTasks || 0;
         const completedTasks = taskAgg[0]?.completedTasks || 0;
@@ -44,7 +49,7 @@ exports.getStats = async (req, res) => {
         if (totalTasks > 0) {
             overallProgress = Math.round((completedTasks / totalTasks) * 100);
         } else if (totalProjects > 0) {
-            const finishedCount = allProjects.filter(p => !ONGOING_STATUSES.includes(normalise(p.status)) && normalise(p.status) === 'completed').length;
+            const finishedCount = allProjects.filter(p => ['completed', 'finished', 'done', 'ended'].includes(normalise(p.status))).length;
             overallProgress = Math.round((finishedCount / totalProjects) * 100);
         }
 
@@ -54,6 +59,7 @@ exports.getStats = async (req, res) => {
                 totalProjects,
                 ongoingProjects,
                 completedProjects,
+                upcomingProjects,
                 totalMembers,
                 activeMembers,
                 totalTasks,
