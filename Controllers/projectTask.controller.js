@@ -1,6 +1,7 @@
 const ProjectTask = require('../Models/projectTask.model');
 const ProjectMember = require('../Models/projectMember.model');
 const Committee = require('../Models/Committee.model');
+const { notify } = require('../Services/notification.service');
 
 const USER_FIELDS = 'name email indexNo userRole';
 
@@ -103,6 +104,17 @@ exports.createTask = async (req, res) => {
         await task.save();
         await task.populate('assignedTo', USER_FIELDS);
 
+        await notify({
+            recipient: task.assignedTo._id,
+            actor: req.auth.id,
+            type: 'TASK_ASSIGNED',
+            message: `${req.user.name} assigned you a task: "${task.title}"`,
+            projectId: task.projectId,
+            committeeId: task.committeeId,
+            taskId: task._id,
+            link: `/projects/${task.projectId}`,
+        });
+
         res.status(201).send({ message: 'Task created', data: task.toClientJSON() });
     } catch (e) {
         if (e.name === 'ValidationError') return res.status(400).send({ message: e.message });
@@ -122,6 +134,9 @@ exports.updateTask = async (req, res) => {
             projectId: req.project._id,
         });
         if (!task) return res.status(404).send({ message: 'Task not found' });
+
+        const previousAssignee = String(task.assignedTo);
+        const wasCompleted = task.status === 'COMPLETED';
 
         const b = req.body || {};
         const wantsStatusOnly = Object.keys(b).every(k => k === 'status');
@@ -199,6 +214,31 @@ exports.updateTask = async (req, res) => {
 
         await task.save();
         await task.populate('assignedTo', USER_FIELDS);
+
+        if (b.assignedTo !== undefined && String(task.assignedTo._id) !== previousAssignee) {
+            await notify({
+                recipient: task.assignedTo._id,
+                actor: req.auth.id,
+                type: 'TASK_ASSIGNED',
+                message: `${req.user.name} assigned you a task: "${task.title}"`,
+                projectId: task.projectId,
+                committeeId: task.committeeId,
+                taskId: task._id,
+                link: `/projects/${task.projectId}`,
+            });
+        }
+        if (task.status === 'COMPLETED' && !wasCompleted && task.createdBy) {
+            await notify({
+                recipient: task.createdBy,
+                actor: req.auth.id,
+                type: 'TASK_COMPLETED',
+                message: `${req.user.name} completed "${task.title}"`,
+                projectId: task.projectId,
+                committeeId: task.committeeId,
+                taskId: task._id,
+                link: `/projects/${task.projectId}`,
+            });
+        }
 
         res.status(200).send({ message: 'Task updated', data: task.toClientJSON() });
     } catch (e) {
@@ -290,8 +330,22 @@ exports.updateMyTaskStatus = async (req, res) => {
         });
         if (!task) return res.status(404).send({ message: 'Task not found' });
 
+        const wasCompleted = task.status === 'COMPLETED';
         task.status = status;
         await task.save();
+
+        if (status === 'COMPLETED' && !wasCompleted && task.createdBy) {
+            await notify({
+                recipient: task.createdBy,
+                actor: req.auth.id,
+                type: 'TASK_COMPLETED',
+                message: `${req.user.name} completed "${task.title}"`,
+                projectId: task.projectId,
+                committeeId: task.committeeId,
+                taskId: task._id,
+                link: `/projects/${task.projectId}`,
+            });
+        }
 
         res.status(200).send({ message: 'Task updated', data: task.toClientJSON() });
     } catch (e) {

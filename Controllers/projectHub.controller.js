@@ -5,6 +5,7 @@ const ProjectTask = require('../Models/projectTask.model');
 const User = require('../Models/baseUser.model');
 const Feedback = require('../Models/feedback.model');
 const Complaint = require('../Models/complaint.model');
+const { notify } = require('../Services/notification.service');
 
 const USER_FIELDS = 'name email indexNo userRole faculty batch contactNO';
 
@@ -594,6 +595,18 @@ exports.addMember = async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         ).populate('userId', USER_FIELDS);
 
+        await notify({
+            recipient: user._id,
+            actor: req.auth.id,
+            type: b.committeeId ? 'COMMITTEE_MEMBER_ADDED' : 'PROJECT_MEMBER_ADDED',
+            message: b.committeeId
+                ? `${req.user.name} added you to a committee in "${req.project.PName}"`
+                : `${req.user.name} added you to project "${req.project.PName}"`,
+            projectId: req.project._id,
+            committeeId: b.committeeId || null,
+            link: `/projects/${req.project._id}`,
+        });
+
         res.status(201).send({ message: `${user.name} added to the project`, data: membership });
     } catch (e) {
         if (e.code === 11000) {
@@ -620,11 +633,15 @@ exports.removeMember = async (req, res) => {
         });
         if (!membership) return res.status(404).send({ message: 'That person is not on this project' });
 
-        // Free any committee they led, and unassign their tasks rather than
-        // deleting work that still needs doing.
+        // Free any committee they led, and remove them from any committee roster
         await Committee.updateMany(
             { ProjectId: req.project._id, leadId: userId },
             { $set: { leadId: null } }
+        );
+
+        await Committee.updateMany(
+            { ProjectId: req.project._id },
+            { $pull: { Members: { UserId: userId } } }
         );
 
         const orphaned = await ProjectTask.countDocuments({

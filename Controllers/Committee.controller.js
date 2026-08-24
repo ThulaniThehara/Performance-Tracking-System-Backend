@@ -4,6 +4,7 @@ const CommitteeCollection = require('../Models/Committee.model');
 // modules, so the model gets registered twice and Mongoose throws
 // OverwriteModelError.
 const ProjectCollection = require('../Models/project.model');
+const { notify } = require('../Services/notification.service');
 
 // Add Committee to a Project (Only by Chairperson)
 exports.addCommittee = async (req, res) => {
@@ -85,6 +86,16 @@ exports.addMember = async (req, res) => {
 
         await committee.save();
 
+        await notify({
+            recipient: userId,
+            actor: req.user?.id,
+            type: 'COMMITTEE_MEMBER_ADDED',
+            message: `You were added to committee "${committee.CName}"`,
+            projectId: committee.ProjectId,
+            committeeId: committee._id,
+            link: `/projects/${committee.ProjectId}`,
+        });
+
         res.status(200).send({
             message: 'Member added successfully',
             data: committee
@@ -117,6 +128,11 @@ exports.removeMember = async (req, res) => {
         // Log before removal
         console.log('Members before removal:', committee.Members.length);
 
+        // Find target member before filtering out
+        const targetMember = committee.Members.find(
+            member => member._id && member._id.toString() === memberId.toString()
+        );
+
         // Remove member by _id
         const originalLength = committee.Members.length;
         committee.Members = committee.Members.filter(
@@ -132,6 +148,15 @@ exports.removeMember = async (req, res) => {
         }
 
         await committee.save();
+
+        // Also delete from ProjectMember database table for that project
+        if (targetMember && targetMember.UserId && committee.ProjectId) {
+            const ProjectMember = require('../Models/projectMember.model');
+            await ProjectMember.findOneAndDelete({
+                projectId: committee.ProjectId,
+                userId: targetMember.UserId
+            });
+        }
 
         res.status(200).send({
             message: 'Member removed successfully',
