@@ -389,6 +389,15 @@ exports.createProject = async (req, res) => {
             position: 'Chairperson',
         });
 
+        await notify({
+            recipient: chair._id,
+            actor: req.auth?.id,
+            type: 'PROJECT_MEMBER_ADDED',
+            message: `You were assigned as Chairperson for project "${project.PName}"`,
+            projectId: project._id,
+            link: `/projects/${project._id}`,
+        });
+
         res.status(201).send({ message: 'Project created', data: project });
     } catch (e) {
         if (e.name === 'ValidationError') return res.status(400).send({ message: e.message });

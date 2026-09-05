@@ -14,6 +14,9 @@ const NOTIFICATION_TYPES = [
     'TASK_COMPLETED',
     'PROJECT_MEMBER_ADDED',
     'COMMITTEE_MEMBER_ADDED',
+    'EVENT_CREATED',
+    'FEEDBACK_SUBMITTED',
+    'COMPLAINT_SUBMITTED',
 ];
 
 const notificationSchema = new mongoose.Schema({
