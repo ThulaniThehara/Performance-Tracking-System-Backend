@@ -37,6 +37,22 @@ exports.addCommittee = async (req, res) => {
         });
 
         await newCommittee.save();
+
+        if (Array.isArray(Members)) {
+            for (const m of Members) {
+                if (m.UserId) {
+                    await notify({
+                        recipient: m.UserId,
+                        actor: req.user?.id || req.auth?.id,
+                        type: 'COMMITTEE_MEMBER_ADDED',
+                        message: `You were added to committee "${CName}"`,
+                        projectId: projectId || null,
+                        committeeId: newCommittee._id,
+                        link: projectId ? `/projects/${projectId}` : '',
+                    });
+                }
+            }
+        }
         
         res.status(200).send({
             message: "Committee added successfully",

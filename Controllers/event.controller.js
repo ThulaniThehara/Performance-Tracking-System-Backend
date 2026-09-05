@@ -65,6 +65,27 @@ exports.addEvent = async (req, res) => {
             createdBy: req.auth?.id,
         });
 
+        // Dispatch notifications to all active members
+        try {
+            const User = require('../Models/baseUser.model');
+            const { notify } = require('../Services/notification.service');
+            const users = await User.find({}, '_id');
+            const dateStr = startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            for (const u of users) {
+                if (String(u._id) !== String(req.auth?.id)) {
+                    await notify({
+                        recipient: u._id,
+                        actor: req.auth?.id,
+                        type: 'EVENT_CREATED',
+                        message: `New event added: "${title}" on ${dateStr}`,
+                        link: '/admin/dashboard',
+                    });
+                }
+            }
+        } catch (notifErr) {
+            console.error('Failed to send event notifications:', notifErr);
+        }
+
         res.status(201).send({ message: 'Event added to the calendar', data: event });
     } catch (e) {
         if (e.name === 'ValidationError') {

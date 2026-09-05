@@ -37,6 +37,63 @@ exports.submitFeedback = async (req, res) => {
 
         await newFeedback.save();
 
+        // Dispatch notifications to Admins and Project Chairperson without sending duplicates if user holds both roles
+        try {
+            const { notify } = require('../Services/notification.service');
+            const Project = require('../Models/project.model');
+
+            let targetProj = null;
+            if (projectId) {
+                targetProj = await Project.findById(projectId);
+            } else if (projectName) {
+                targetProj = await Project.findOne({ PName: projectName });
+            }
+
+            const admins = await User.find({ userRole: 'ADMIN' }, '_id');
+            const adminIdsSet = new Set(admins.map(a => String(a._id)));
+            const chairIdStr = targetProj?.chairpersonId ? String(targetProj.chairpersonId._id || targetProj.chairpersonId) : null;
+            const shortMsg = message.length > 50 ? `${message.substring(0, 50)}...` : message;
+
+            // 1. Notify Admins (if admin is also the project chairperson, send specific project message)
+            for (const admin of admins) {
+                const adminIdStr = String(admin._id);
+                if (adminIdStr === String(userId)) continue;
+
+                if (chairIdStr && adminIdStr === chairIdStr && targetProj) {
+                    await notify({
+                        recipient: admin._id,
+                        actor: userId,
+                        type: 'FEEDBACK_SUBMITTED',
+                        message: `New feedback for "${targetProj.PName}" from ${userAuthor}: "${shortMsg}"`,
+                        projectId: targetProj._id,
+                        link: `/projects/${targetProj._id}?tab=feedbacks`,
+                    });
+                } else {
+                    await notify({
+                        recipient: admin._id,
+                        actor: userId,
+                        type: 'FEEDBACK_SUBMITTED',
+                        message: `New feedback from ${userAuthor}: "${shortMsg}"`,
+                        link: '/AdminFeedback',
+                    });
+                }
+            }
+
+            // 2. Notify Project Chairperson if not already notified in admin loop above
+            if (targetProj && chairIdStr && chairIdStr !== String(userId) && !adminIdsSet.has(chairIdStr)) {
+                await notify({
+                    recipient: targetProj.chairpersonId,
+                    actor: userId,
+                    type: 'FEEDBACK_SUBMITTED',
+                    message: `New feedback for "${targetProj.PName}" from ${userAuthor}: "${shortMsg}"`,
+                    projectId: targetProj._id,
+                    link: `/projects/${targetProj._id}?tab=feedbacks`,
+                });
+            }
+        } catch (notifErr) {
+            console.error('Error dispatching feedback notification:', notifErr);
+        }
+
         res.status(201).send({
             message: 'Feedback submitted successfully! Thank you.',
             feedback: newFeedback,
@@ -82,6 +139,62 @@ exports.submitComplaint = async (req, res) => {
         });
 
         await newComplaint.save();
+
+        // Dispatch notifications to Admins and Project Chairperson without duplicates
+        try {
+            const { notify } = require('../Services/notification.service');
+            const Project = require('../Models/project.model');
+
+            let targetProj = null;
+            if (projectId) {
+                targetProj = await Project.findById(projectId);
+            } else if (projectName) {
+                targetProj = await Project.findOne({ PName: projectName });
+            }
+
+            const admins = await User.find({ userRole: 'ADMIN' }, '_id');
+            const adminIdsSet = new Set(admins.map(a => String(a._id)));
+            const chairIdStr = targetProj?.chairpersonId ? String(targetProj.chairpersonId._id || targetProj.chairpersonId) : null;
+
+            // 1. Notify Admins
+            for (const admin of admins) {
+                const adminIdStr = String(admin._id);
+                if (adminIdStr === String(userId)) continue;
+
+                if (chairIdStr && adminIdStr === chairIdStr && targetProj) {
+                    await notify({
+                        recipient: admin._id,
+                        actor: userId,
+                        type: 'COMPLAINT_SUBMITTED',
+                        message: `Issue reported in "${targetProj.PName}" by ${userFrom}: "${title}"`,
+                        projectId: targetProj._id,
+                        link: `/projects/${targetProj._id}?tab=complaints`,
+                    });
+                } else {
+                    await notify({
+                        recipient: admin._id,
+                        actor: userId,
+                        type: 'COMPLAINT_SUBMITTED',
+                        message: `New issue reported by ${userFrom}: "${title}"`,
+                        link: '/AdminFeedback',
+                    });
+                }
+            }
+
+            // 2. Notify Project Chairperson if not already notified in admin loop above
+            if (targetProj && chairIdStr && chairIdStr !== String(userId) && !adminIdsSet.has(chairIdStr)) {
+                await notify({
+                    recipient: targetProj.chairpersonId,
+                    actor: userId,
+                    type: 'COMPLAINT_SUBMITTED',
+                    message: `Issue reported in "${targetProj.PName}" by ${userFrom}: "${title}"`,
+                    projectId: targetProj._id,
+                    link: `/projects/${targetProj._id}?tab=complaints`,
+                });
+            }
+        } catch (notifErr) {
+            console.error('Error dispatching complaint notification:', notifErr);
+        }
 
         res.status(201).send({
             message: 'Complaint / Issue report submitted successfully. Admin has received it.',

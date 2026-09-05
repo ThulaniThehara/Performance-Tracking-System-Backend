@@ -2,19 +2,28 @@ const Notification = require('../Models/notification.model');
 const ProjectTask = require('../Models/projectTask.model');
 const DismissedDeadline = require('../Models/dismissedDeadline.model');
 
+const Project = require('../Models/project.model');
+const User = require('../Models/baseUser.model');
+
 // A task inside this window shows up as a "due soon" reminder.
 const DEADLINE_SOON_HOURS = 48;
 
 /**
  * Deadline reminders derived live from the caller's open tasks, minus
- * whichever ones they've already dismissed (see DismissedDeadline). The
- * reminder itself is never stored — it's recomputed from ProjectTask on
- * every call, the same way ProjectTask itself derives "overdue" from
- * dueDate on read instead of through a scheduled job (see
- * ProjectTask.isOverdue) — but dismissal state has to be stored somewhere,
- * or a reminder the user already saw would come back unread on every poll.
+ * whichever ones they've already dismissed (see DismissedDeadline).
+ *
+ * For Chairpersons & Admins:
+ * Overdue tasks across their chaired projects (or system-wide for Admins)
+ * are also included so leadership is notified of overdue deliverables.
  */
 async function computeDeadlineItems(userId) {
+    const user = await User.findById(userId);
+    const isSystemAdmin = user?.userRole === 'ADMIN';
+
+    // Find projects where caller is chairperson
+    const chairedProjects = await Project.find({ chairpersonId: userId }, '_id');
+    const chairedProjectIds = chairedProjects.map(p => p._id);
+
     const [myTasks, dismissed] = await Promise.all([
         ProjectTask.find({ assignedTo: userId, status: { $ne: 'COMPLETED' } })
             .populate('projectId', 'PName'),
@@ -22,11 +31,12 @@ async function computeDeadlineItems(userId) {
     ]);
 
     const dismissedSet = new Set(dismissed.map(d => `${d.taskId}-${d.kind}`));
-
     const now = Date.now();
     const soonCutoff = now + DEADLINE_SOON_HOURS * 60 * 60 * 1000;
     const items = [];
+    const processedTaskIds = new Set();
 
+    // 1. Tasks assigned directly to the caller
     for (const t of myTasks) {
         const due = t.dueDate ? t.dueDate.getTime() : null;
         if (!due) continue;
@@ -34,6 +44,7 @@ async function computeDeadlineItems(userId) {
         const kind = due < now ? 'overdue' : (due <= soonCutoff ? 'soon' : null);
         if (!kind || dismissedSet.has(`${t._id}-${kind}`)) continue;
 
+        processedTaskIds.add(String(t._id));
         const projectName = t.projectId?.PName || '';
         const projectIdStr = t.projectId?._id || t.projectId;
 
@@ -49,6 +60,43 @@ async function computeDeadlineItems(userId) {
             createdAt: t.dueDate,
             isRead: false,
         });
+    }
+
+    // 2. Overdue tasks in caller's chaired projects (or all projects for Admins)
+    if (isSystemAdmin || chairedProjectIds.length > 0) {
+        const overdueFilter = {
+            status: { $ne: 'COMPLETED' },
+            dueDate: { $lt: new Date(now) },
+        };
+
+        if (!isSystemAdmin) {
+            overdueFilter.projectId = { $in: chairedProjectIds };
+        }
+
+        const overdueOtherTasks = await ProjectTask.find(overdueFilter)
+            .populate('projectId', 'PName')
+            .populate('assignedTo', 'name');
+
+        for (const t of overdueOtherTasks) {
+            const taskIdStr = String(t._id);
+            if (processedTaskIds.has(taskIdStr)) continue;
+            if (dismissedSet.has(`${taskIdStr}-overdue`)) continue;
+
+            const projectName = t.projectId?.PName || '';
+            const projectIdStr = t.projectId?._id || t.projectId;
+            const assigneeName = t.assignedTo?.name || 'Unassigned';
+
+            items.push({
+                id: `deadline-overdue-${t._id}`,
+                taskId: taskIdStr,
+                kind: 'overdue',
+                type: 'DEADLINE_OVERDUE',
+                message: `Task overdue: "${t.title}" in ${projectName || 'Project'} (${assigneeName})`,
+                link: projectIdStr ? `/projects/${projectIdStr}` : '',
+                createdAt: t.dueDate,
+                isRead: false,
+            });
+        }
     }
 
     return items;
