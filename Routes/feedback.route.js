@@ -1,6 +1,7 @@
 const express = require('express');
 const feedbackController = require('../Controllers/feedback.controller');
 const { verifyToken, requireRole } = require('../Middleware/auth.middleware');
+const { loadProjectAccess, requirePerm } = require('../Middleware/projectAccess.middleware');
 
 const router = express.Router();
 
@@ -8,7 +9,11 @@ const router = express.Router();
 router.post('/submit-feedback', verifyToken, feedbackController.submitFeedback);
 router.post('/submit-complaint', verifyToken, feedbackController.submitComplaint);
 router.get('/my-submissions', verifyToken, feedbackController.getMySubmissions);
-router.get('/project/:projectId', verifyToken, feedbackController.getProjectSubmissions);
+
+// Only the project's chairperson (or an admin) may see everyone's submissions
+// for that project — a regular member must not see what others reported.
+router.get('/project/:projectId',
+    verifyToken, loadProjectAccess, requirePerm('canViewSubmissions'), feedbackController.getProjectSubmissions);
 
 // Admin-only routes
 router.get('/admin/all', verifyToken, requireRole('ADMIN'), feedbackController.getAllAdminSubmissions);

@@ -22,6 +22,11 @@ const permissionsFor = (projectRole, globalRole) => {
         canManageCommittees: isChair,
         canManageMembers: isChair,
 
+        // Feedback/complaints submitted by one member about another must stay
+        // private to that pair plus oversight — only the project's chairperson
+        // (or a global admin) may read the project's full submissions list.
+        canViewSubmissions: isChair,
+
         canCreateTasks: isChair,
         canDeleteTasks: isChair,
 
